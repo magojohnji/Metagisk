@@ -5,6 +5,8 @@ import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.android.build.gradle.BaseExtension
 import com.android.build.gradle.internal.dsl.BaseAppModuleExtension
 import com.android.builder.internal.packaging.IncrementalPackager
+import com.android.ide.common.signing.CertificateInfo
+import com.android.ide.common.signing.KeystoreHelper
 import com.android.tools.build.apkzlib.sign.SigningExtension
 import com.android.tools.build.apkzlib.sign.SigningOptions
 import com.android.tools.build.apkzlib.zfile.ZFiles
@@ -17,6 +19,7 @@ import org.gradle.api.Project
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.plugins.ExtensionAware
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.Delete
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
@@ -32,6 +35,7 @@ import org.gradle.kotlin.dsl.named
 import org.gradle.kotlin.dsl.provideDelegate
 import org.gradle.kotlin.dsl.register
 import org.gradle.kotlin.dsl.registering
+import org.gradle.process.ExecOperations
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinJvmOptions
 import java.io.ByteArrayOutputStream
@@ -44,25 +48,26 @@ import java.util.zip.DeflaterOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
+import javax.inject.Inject
 
 private fun Project.androidBase(configure: Action<BaseExtension>) =
-    extensions.configure("android", configure)
+    extensions.configure(BaseExtension::class.java, configure)
 
 private fun Project.android(configure: Action<BaseAppModuleExtension>) =
-    extensions.configure("android", configure)
+    extensions.configure(BaseAppModuleExtension::class.java, configure)
 
 private fun BaseExtension.kotlinOptions(configure: Action<KotlinJvmOptions>) =
-    (this as ExtensionAware).extensions.findByName("kotlinOptions")?.let {
-        configure.execute(it as KotlinJvmOptions)
+    (this as ExtensionAware).extensions.findByType(KotlinJvmOptions::class.java)?.let {
+        configure.execute(it)
     }
 
 private fun BaseExtension.kotlin(configure: Action<KotlinAndroidProjectExtension>) =
-    (this as ExtensionAware).extensions.findByName("kotlin")?.let {
-        configure.execute(it as KotlinAndroidProjectExtension)
+    (this as ExtensionAware).extensions.findByType(KotlinAndroidProjectExtension::class.java)?.let {
+        configure.execute(it)
     }
 
-private val Project.android: BaseAppModuleExtension
-    get() = extensions["android"] as BaseAppModuleExtension
+private val Project.android
+    get() = extensions.getByType(BaseAppModuleExtension::class.java)
 
 private val Project.androidComponents
     get() = extensions.getByType(ApplicationAndroidComponentsExtension::class.java)
@@ -107,9 +112,6 @@ abstract class AddCommentTask: DefaultTask() {
     @get:Input
     abstract val comment: Property<String>
 
-    @get:Input
-    abstract val signingConfig: Property<ApkSigningConfig>
-
     @get:InputFiles
     abstract val apkFolder: DirectoryProperty
 
@@ -119,18 +121,35 @@ abstract class AddCommentTask: DefaultTask() {
     @get:Internal
     abstract val transformationRequest: Property<ArtifactTransformationRequest<AddCommentTask>>
 
+    @get:Internal
+    abstract val storeType: Property<String>
+
+    @get:Internal
+    abstract val storeFile: Property<File>
+
+    @get:Internal
+    abstract val storePassword: Property<String>
+
+    @get:Internal
+    abstract val keyPassword: Property<String>
+
+    @get:Internal
+    abstract val keyAlias: Property<String>
+
     @TaskAction
     fun taskAction() = transformationRequest.get().submit(this) { artifact ->
         val inFile = File(artifact.outputFile)
         val outFile = outFolder.file(inFile.name).get().asFile
 
-        val privateKey = signingConfig.get().getPrivateKey()
+        val certificateInfo = KeystoreHelper.getCertificateInfo(
+            storeType.get(), storeFile.get(), storePassword.get(), keyPassword.get(), keyAlias.get()
+        )
         val signingOptions = SigningOptions.builder()
             .setMinSdkVersion(0)
             .setV1SigningEnabled(true)
             .setV2SigningEnabled(true)
-            .setKey(privateKey.privateKey)
-            .setCertificates(privateKey.certificate as X509Certificate)
+            .setKey(certificateInfo.key)
+            .setCertificates(certificateInfo.certificate)
             .setValidation(SigningOptions.Validation.ASSUME_INVALID)
             .build()
         val options = ZFileOptions().apply {
@@ -152,15 +171,16 @@ abstract class AddCommentTask: DefaultTask() {
 
 private fun Project.setupAppCommon() {
     setupCommon()
-
+    val configProvider = gradle.sharedServices.registrations.getByName("config").service as Provider<ConfigService>
     android {
         signingConfigs {
             create("config") {
-                Config["keyStore"]?.also {
+                val config = configProvider.get()
+                config["keyStore"]?.also {
                     storeFile = rootProject.file(it)
-                    storePassword = Config["keyStorePass"]
-                    keyAlias = Config["keyAlias"]
-                    keyPassword = Config["keyPass"]
+                    storePassword = config["keyStorePass"]
+                    keyAlias = config["keyAlias"]
+                    keyPassword = config["keyPass"]
                 }
             }
         }
@@ -200,13 +220,17 @@ private fun Project.setupAppCommon() {
         val transformationRequest = variant.artifacts.use(commentTask)
             .wiredWithDirectories(AddCommentTask::apkFolder, AddCommentTask::outFolder)
             .toTransformMany(SingleArtifact.APK)
-        val signingConfig = android.buildTypes.getByName(variant.buildType!!).signingConfig
+        val signingConfig = android.buildTypes.getByName(variant.buildType!!).signingConfig!!
         commentTask.configure {
             this.transformationRequest.set(transformationRequest)
-            this.signingConfig.set(signingConfig)
-            this.comment.set("version=${Config.version}\n" +
-                "versionCode=${Config.versionCode}\n" +
-                "stubVersion=${Config.stubVersion}\n")
+            this.storeType.set(signingConfig.storeType)
+            this.storeFile.set(signingConfig.storeFile)
+            this.storePassword.set(signingConfig.storePassword)
+            this.keyPassword.set(signingConfig.keyPassword)
+            this.keyAlias.set(signingConfig.keyAlias)
+            this.comment.set("version=${configProvider.get().version}\n" +
+                "versionCode=${configProvider.get().versionCode}\n" +
+                "stubVersion=${configProvider.get().stubVersion}\n")
             this.outFolder.set(File(buildDir, "outputs/apk/${variant.name}"))
         }
     }
@@ -214,7 +238,7 @@ private fun Project.setupAppCommon() {
 
 fun Project.setupApp() {
     setupAppCommon()
-
+    val configProvider = gradle.sharedServices.registrations.getByName("config").service as Provider<ConfigService>
     val syncLibs by tasks.registering(Sync::class) {
         into("src/main/jniLibs")
         into("armeabi-v7a") {
@@ -271,8 +295,8 @@ fun Project.setupApp() {
 
         val syncAssets = tasks.register("sync${variantCapped}Assets", Sync::class) {
             dependsOn(stubTask)
-            inputs.property("version", Config.version)
-            inputs.property("versionCode", Config.versionCode)
+            inputs.property("version", configProvider.get().version)
+            inputs.property("versionCode", configProvider.get().versionCode)
             into("src/${this@all.name}/assets")
             from(rootProject.file("scripts")) {
                 include("util_functions.sh", "boot_patch.sh", "addon.d.sh")
@@ -292,7 +316,7 @@ fun Project.setupApp() {
                 filter {
                     it.replace(
                         "#MAGISK_VERSION_STUB",
-                        "MAGISK_VER='${Config.version}'\nMAGISK_VER_CODE=${Config.versionCode}"
+                        "MAGISK_VER='${configProvider.get().version}'\nMAGISK_VER_CODE=${configProvider.get().versionCode}"
                     )
                 }
                 filter<FixCrLfFilter>("eol" to FixCrLfFilter.CrLf.newInstance("lf"))
@@ -315,9 +339,14 @@ fun Project.setupApp() {
     }
 }
 
+interface Injected {
+    @get:Inject
+    val exec: ExecOperations
+}
+
 fun Project.setupStub() {
     setupAppCommon()
-
+    val configProvider = gradle.sharedServices.registrations.getByName("config").service as Provider<ConfigService>
     androidComponents.onVariants { variant ->
         val variantName = variant.name
         val variantCapped = variantName.replaceFirstChar { it.uppercase() }
@@ -327,6 +356,7 @@ fun Project.setupStub() {
                 applicationId.set(variant.applicationId)
                 appClassDir.set(File(buildDir, "generated/source/app/$variantName"))
                 factoryClassDir.set(File(buildDir, "generated/source/factory/$variantName"))
+                this.config.set(configProvider)
             }
         variant.artifacts.use(manifestUpdater)
             .wiredWithFiles(
@@ -346,21 +376,21 @@ fun Project.setupStub() {
             "${variantLowered}/out/resources-${variantLowered}.ap_")
 
         val genManifestTask = tasks.register("generate${variantCapped}ObfuscatedClass") {
-            inputs.property("seed", RAND_SEED)
             outputs.dirs(outFactoryClassDir, outAppClassDir)
             doLast {
                 outFactoryClassDir.mkdirs()
                 outAppClassDir.mkdirs()
-                genStubClasses(outFactoryClassDir, outAppClassDir)
+                genStubClasses(configProvider, outFactoryClassDir, outAppClassDir)
             }
         }
         registerJavaGeneratingTask(genManifestTask, outFactoryClassDir, outAppClassDir)
 
         val processResourcesTask = tasks.named("process${variantCapped}Resources") {
             outputs.dir(outResDir)
+            val inject = objects.newInstance(Injected::class.java)
             doLast {
                 val apkTmp = File("${apk}.tmp")
-                exec {
+                inject.exec.exec {
                     commandLine(aapt, "optimize", "-o", apkTmp, "--collapse-resource-names", apk)
                 }
 
@@ -377,7 +407,7 @@ fun Project.setupStub() {
                     }
                 }
                 apkTmp.delete()
-                genEncryptedResources(bos.toByteArray(), outResDir)
+                genEncryptedResources(configProvider, bos.toByteArray(), outResDir)
             }
         }
 

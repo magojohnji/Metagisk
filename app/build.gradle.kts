@@ -20,12 +20,12 @@ kapt {
 
 android {
     namespace = "com.topjohnwu.magisk"
-
+    val config = gradle.sharedServices.registrations.getByName("config").service.get() as ConfigService
     defaultConfig {
         applicationId = "com.topjohnwu.magisk"
         vectorDrawables.useSupportLibrary = true
-        versionName = Config.version
-        versionCode = Config.versionCode
+        versionName = config.version
+        versionCode = config.versionCode
         ndk.abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
     }
 

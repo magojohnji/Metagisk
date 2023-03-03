@@ -2,12 +2,12 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.*
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.PrintStream
-import java.security.SecureRandom
 import java.util.*
 import javax.crypto.Cipher
 import javax.crypto.CipherOutputStream
@@ -17,16 +17,13 @@ import kotlin.random.asKotlinRandom
 
 // Set non-zero value here to fix the random seed for reproducible builds
 // CI builds are always reproducible
-val RAND_SEED = if (System.getenv("CI") != null) 42 else 0
-private lateinit var RANDOM: Random
-private val kRANDOM get() = RANDOM.asKotlinRandom()
 
 private val c1 = mutableListOf<String>()
 private val c2 = mutableListOf<String>()
 private val c3 = mutableListOf<String>()
 
-fun initRandom(dict: File) {
-    RANDOM = if (RAND_SEED != 0) Random(RAND_SEED.toLong()) else SecureRandom()
+fun initRandom(config: ConfigService, dict: File) {
+    val random = config.random
     c1.clear()
     c2.clear()
     c3.clear()
@@ -41,9 +38,9 @@ fun initRandom(dict: File) {
             }
         }
     }
-    c1.shuffle(RANDOM)
-    c2.shuffle(RANDOM)
-    c3.shuffle(RANDOM)
+    c1.shuffle(random)
+    c2.shuffle(random)
+    c3.shuffle(random)
     PrintStream(dict).use {
         for (c in chain(c1, c2, c3)) {
             it.println(c)
@@ -96,6 +93,9 @@ abstract class ManifestUpdater: DefaultTask() {
 
     @get:OutputFile
     abstract val outputManifest: RegularFileProperty
+
+    @get:Internal
+    abstract val config: Property<ConfigService>
 
     @TaskAction
     fun taskAction() {
@@ -168,7 +168,7 @@ abstract class ManifestUpdater: DefaultTask() {
         )
 
         // Shuffle the order of the components
-        cmpList.shuffle(RANDOM)
+        cmpList.shuffle(config.get().random)
         val (factoryPkg, factoryClass) = factoryClassDir.asFileTree.first().let {
             it.parentFile.name to it.name.removeSuffix(".java")
         }
@@ -187,9 +187,11 @@ abstract class ManifestUpdater: DefaultTask() {
 }
 
 
-fun genStubClasses(factoryOutDir: File, appOutDir: File) {
+fun genStubClasses(configProvider: Provider<ConfigService>, factoryOutDir: File, appOutDir: File) {
     fun String.ind(level: Int) = replaceIndentByMargin("    ".repeat(level))
 
+    val random = configProvider.get().random
+    val kRandom = random.asKotlinRandom()
     val classNameGenerator = sequence {
         fun notJavaKeyword(name: String) = when (name) {
             "do", "if", "for", "int", "new", "try" -> false
@@ -205,13 +207,13 @@ fun genStubClasses(factoryOutDir: File, appOutDir: File) {
         names.addAll(c1)
         names.addAll(c2.process().take(30))
         names.addAll(c3.process().take(30))
-        names.shuffle(RANDOM)
+        names.shuffle(random)
 
         while (true) {
             val cls = StringBuilder()
-            cls.append(names.random(kRANDOM))
+            cls.append(names.random(kRandom))
             cls.append('.')
-            cls.append(names.random(kRANDOM))
+            cls.append(names.random(kRandom))
             // Old Android does not support capitalized package names
             // Check Android 7.0.0 PackageParser#buildClassName
             yield(cls.toString().replaceFirstChar { it.lowercase() })
@@ -233,15 +235,16 @@ fun genStubClasses(factoryOutDir: File, appOutDir: File) {
     genClass("DelegateApplication", appOutDir)
 }
 
-fun genEncryptedResources(res: ByteArray, outDir: File) {
+fun genEncryptedResources(configProvider: Provider<ConfigService>, res: ByteArray, outDir: File) {
     val mainPkgDir = File(outDir, "com/topjohnwu/magisk")
     mainPkgDir.mkdirs()
 
+    val random = configProvider.get().random
     // Generate iv and key
     val iv = ByteArray(16)
     val key = ByteArray(32)
-    RANDOM.nextBytes(iv)
-    RANDOM.nextBytes(key)
+    random.nextBytes(iv)
+    random.nextBytes(key)
 
     val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
     cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
