@@ -130,6 +130,27 @@ macro_rules! perror {
 }
 
 #[macro_export]
+macro_rules! serror {
+    ($src:expr, $fmt:expr) => {
+        $crate::log_impl($crate::ffi::LogLevel::Error, format_args_nl!(
+            concat!("{}: ", $fmt, " failed with {}: {}"),
+            crate::ffi2::source_to_str($src),
+            crate::errno(),
+            crate::error_str()
+        ))
+    };
+    ($src:expr, $fmt:expr, $($args:tt)*) => {
+        $crate::log_impl($crate::ffi::LogLevel::Error, format_args_nl!(
+            concat!("{}: ", $fmt, " failed with {}: {}"),
+            crate::ffi2::source_to_str($src),
+            $($args)*,
+            crate::errno(),
+            crate::error_str()
+        ))
+    };
+}
+
+#[macro_export]
 macro_rules! error {
     ($($args:tt)+) => ($crate::log_impl($crate::ffi::LogLevel::Error, format_args_nl!($($args)+)))
 }

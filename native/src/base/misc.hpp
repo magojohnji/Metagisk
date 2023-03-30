@@ -180,7 +180,7 @@ struct exec_t {
     bool err = false;
     int fd = -2;
     void (*pre_exec)() = nullptr;
-    int (*fork)() = xfork;
+    int (*fork)() = +[] { return xfork(); };
     const char **argv = nullptr;
 };
 

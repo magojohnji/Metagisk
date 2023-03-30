@@ -36,4 +36,9 @@ pub mod ffi2 {
         fn xpipe2(fds: &mut [i32; 2], flags: i32) -> i32;
         fn fd_path(fd: i32, buf: &mut [u8]) -> isize;
     }
+
+    unsafe extern "C++" {
+        pub(crate) type source_location;
+        pub unsafe fn source_to_str(source: *const source_location) -> String;
+    }
 }

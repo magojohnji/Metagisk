@@ -7,7 +7,7 @@ use std::path::Path;
 
 use libc::{c_char, c_uint, mode_t, EEXIST, ENOENT, O_CLOEXEC, O_PATH};
 
-use crate::{bfmt_cstr, errno, xopen};
+use crate::{bfmt_cstr, errno};
 
 pub mod unsafe_impl {
     use std::ffi::CStr;
@@ -41,15 +41,6 @@ pub fn __open_fd_impl(path: &CStr, flags: i32, mode: mode_t) -> Option<OwnedFd> 
     }
 }
 
-pub fn __xopen_fd_impl(path: &CStr, flags: i32, mode: mode_t) -> Option<OwnedFd> {
-    let fd = xopen(path.as_ptr(), flags, mode);
-    if fd >= 0 {
-        unsafe { Some(OwnedFd::from_raw_fd(fd)) }
-    } else {
-        None
-    }
-}
-
 #[macro_export]
 macro_rules! open_fd {
     ($path:expr, $flags:expr) => {
@@ -57,16 +48,6 @@ macro_rules! open_fd {
     };
     ($path:expr, $flags:expr, $mode:expr) => {
         crate::__open_fd_impl($path, $flags, $mode)
-    };
-}
-
-#[macro_export]
-macro_rules! xopen_fd {
-    ($path:expr, $flags:expr) => {
-        crate::__xopen_fd_impl($path, $flags, 0)
-    };
-    ($path:expr, $flags:expr, $mode:expr) => {
-        crate::__xopen_fd_impl($path, $flags, $mode)
     };
 }
 

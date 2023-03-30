@@ -100,7 +100,7 @@ void exec_common_scripts(const char *stage) {
             strcpy(name, entry->d_name);
             exec_t exec {
                 .pre_exec = set_script_env,
-                .fork = pfs ? xfork : fork_dont_care
+                .fork = pfs ? +[] { return xfork(); } : fork_dont_care
             };
             exec_command(exec, BBEXEC_CMD, path);
             PFS_WAIT()
@@ -141,7 +141,7 @@ void exec_module_scripts(const char *stage, const vector<string_view> &modules) 
         LOGI("%s: exec [%s.sh]\n", module, stage);
         exec_t exec {
             .pre_exec = set_script_env,
-            .fork = pfs ? xfork : fork_dont_care
+            .fork = pfs ? +[]() { return xfork(); } : fork_dont_care
         };
         exec_command(exec, BBEXEC_CMD, path);
         PFS_WAIT()
